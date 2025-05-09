@@ -1,3 +1,6 @@
+运行效果：
+![image](https://github.com/user-attachments/assets/a03b9088-7693-4dd8-848d-edc7e6648463)
+
 课程项目总结报告
 ——日志采集与可视化监控系统
 
