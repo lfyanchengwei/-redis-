@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>设备监控仪表盘</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.5.4/socket.io.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/echarts/5.4.2/echarts.min.js"></script>
+    <style>
+        :root {
+            --primary-color: #2196F3;
+            --warn-color: #FFC107;
+            --error-color: #F44336;
+        }
+
+        body {
+            font-family: 'Microsoft YaHei', sans-serif;
+            margin: 0;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+
+        .device-selector {
+            margin: 20px 0;
+            padding: 12px;
+            width: 300px;
+            border: 1px solid #ddd;
+            border-radius: 6px;
+            font-size: 16px;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 24px;
+        }
+
+        .status-card {
+            background: white;
+            border-radius: 8px;
+            padding: 24px;
+            box-shadow: 0 2px 12px rgba(0,0,0,0.1);
+        }
+
+        .chart-container {
+            height: 400px;
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            margin-top: 24px;
+        }
+
+        .status-item {
+            margin: 12px 0;
+            font-size: 16px;
+        }
+
+        .status-value {
+            font-weight: bold;
+            color: var(--primary-color);
+        }
+
+        .alert-badge {
+            display: inline-block;
+            padding: 4px 8px;
+            border-radius: 4px;
+            color: white;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>设备日志监控仪表盘</h1>
+
+        <select class="device-selector" id="deviceSelect">
+            <option value="">请选择设备</option>
+        </select>
+
+        <div class="dashboard-grid">
+            <div class="status-card">
+                <h2>实时状态</h2>
+                <div class="status-item">
+                    错误率: <span class="status-value" id="errorRatio">0%</span>
+                </div>
+                <div class="status-item">
+                    警告率: <span class="status-value" id="warnRatio">0%</span>
+                </div>
+                <div class="status-item">
+                    最后错误: <span id="lastError">无</span>
+                </div>
+            </div>
+
+            <div class="status-card">
+                <h2>告警统计</h2>
+                <div class="status-item">
+                    总告警次数: <span class="status-value" id="alertCount">0</span>
+                </div>
+                <div id="alertList"></div>
+            </div>
+        </div>
+
+        <div class="chart-container">
+            <div id="trendChart" style="height:100%"></div>
+        </div>
+    </div>
+
+    <script>
+        // 初始化ECharts实例
+        let trendChart = echarts.init(document.getElementById('trendChart'));
+        let option = {
+            tooltip: {
+                trigger: 'axis'
+            },
+            legend: {
+                data: ['错误率', '警告率']
+            },
+            xAxis: {
+                type: 'category',
+                data: []
+            },
+            yAxis: {
+                type: 'value',
+                axisLabel: {
+                    formatter: '{value}%'
+                }
+            },
+            series: [{
+                name: '错误率',
+                type: 'line',
+                smooth: true,
+                data: [],
+                itemStyle: { color: '#F44336' }
+            },{
+                name: '警告率',
+                type: 'line',
+                smooth: true,
+                data: [],
+                itemStyle: { color: '#FFC107' }
+            }]
+        };
+        trendChart.setOption(option);
+
+        // WebSocket连接
+        const socket = io();
+        socket.onAny((event, args) => {
+            console.log('[全局事件监听]', event, args);
+        });
+
+        // 设备列表更新
+        function updateDeviceList(devices) {
+            const select = document.getElementById('deviceSelect');
+            devices.forEach(device => {
+                if (![...select.options].some(opt => opt.value === device)) {
+                    const option = document.createElement('option');
+                    option.value = device;
+                    option.textContent = device;
+                    select.appendChild(option);
+                }
+            });
+        }
+
+        // 处理实时数据更新
+        function handleDataUpdate(data) {
+            console.log(data)
+            // 更新统计信息
+            document.getElementById('errorRatio').textContent =
+                (data.data.current.errors * 100).toFixed(1) + '%';
+            document.getElementById('warnRatio').textContent =
+                (data.data.current.warns * 100).toFixed(1) + '%';
+
+            // 更新最后错误显示
+            const lastErrorEl = document.getElementById('lastError');
+            if (data.data.current.last_error) {
+                lastErrorEl.innerHTML = `
+                    <span class="alert-badge" style="background:${data.type === 'alert' ? '#F44336' : '#FFC107'}">
+                        ${data.type === 'alert' ? 'ERROR' : 'WARN'}
+                    </span>
+                    ${new Date(data.data.current.last_error.timestamp).toLocaleString()}:
+                    ${data.data.current.last_error.message}
+                `;
+            } else {
+                lastErrorEl.textContent = '无';
+            }
+
+            // 更新告警统计
+            document.getElementById('alertCount').textContent = data.data.alert_count;
+
+            // 更新趋势图
+            option.xAxis.data.push(new Date().toLocaleTimeString());
+            option.series[0].data.push(data.data.current.errors * 100);
+            option.series[1].data.push(data.data.current.warns * 100);
+
+            // 保持最多50个数据点
+            if (option.xAxis.data.length > 50) {
+                option.xAxis.data.shift();
+                option.series[0].data.shift();
+                option.series[1].data.shift();
+            }
+
+            trendChart.setOption(option);
+        }
+
+        // WebSocket监听
+        socket.on('device_list', data => updateDeviceList(data.devices));
+        socket.on('data_update', data => handleDataUpdate(data));
+
+        // 设备选择事件
+        document.getElementById('deviceSelect').addEventListener('change', function() {
+            trendChart.clear();
+            option.xAxis.data = [];
+            option.series[0].data = [];
+            option.series[1].data = [];
+            trendChart.setOption(option);
+        });
+    </script>
+</body>
+</html>
